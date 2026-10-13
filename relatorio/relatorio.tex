@@ -6,15 +6,11 @@
 \usepackage{amsmath,amssymb}
 \usepackage{graphicx}
 \usepackage{booktabs}
-\usepackage{listings}
-\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{stfloats}
 \usepackage[hidelinks]{hyperref}
 
 \newcommand{\gitrepo}{https://github.com/GJakobi/ta03-transformacao-perspectiva}
-
-\lstset{basicstyle=\ttfamily\footnotesize, breaklines=true, frame=single,
-        keywordstyle=\color{blue!60!black}, commentstyle=\color{gray},
-        language=Python, columns=fullflexible}
 
 \title{\textbf{Scanner de documentos com transformação perspectiva em OpenCV}}
 \author{Gustavo Jakobi (GRR20221253) \and Bruno Crestani (GRR20221240)\\[2pt]
@@ -27,226 +23,115 @@
 \maketitle
 
 \begin{abstract}
-Este trabalho apresenta uma aplicação simples de transformação perspectiva:
-um scanner de documentos. A aplicação recebe a foto de uma folha tirada em
-ângulo, encontra os quatro cantos da folha, calcula a homografia que leva
-esses cantos a um retângulo e aplica \texttt{cv2.warpPerspective}. O resultado
-parece uma página escaneada. Testamos a aplicação em cinco fotos sintéticas
-com cantos conhecidos e numa foto real. Após um refinamento por ajuste de retas, o erro médio
-dos cantos ficou abaixo de 0{,}5~px em quatro casos e em 1{,}6~px no caso de
-perspectiva mais forte.
+Apresentamos um scanner de documentos baseado em homografia. A aplicação
+encontra os 4 cantos de uma folha fotografada em ângulo, leva esses cantos a
+um retângulo com \texttt{cv2.warpPerspective} e binariza o resultado. Em cinco
+fotos sintéticas, o erro médio dos cantos ficou abaixo de 1{,}6~px. Numa foto
+real, o documento saiu retificado e legível.
 \end{abstract}
 
-\section{Introdução}
-Uma foto de um documento quase nunca é tirada exatamente de frente. A câmera
-fica inclinada, e a folha retangular aparece como um quadrilátero qualquer.
-Retas continuam retas, mas o paralelismo, os ângulos e as razões de distância
-mudam.
-
-A folha é um objeto plano. Pontos de um plano e seus pontos na imagem estão
-relacionados por uma transformação projetiva (homografia)~\cite{hartley,szeliski,todt}.
-Portanto, uma única matriz $3\times3$ desfaz a perspectiva. A aplicação usa
-este fato para gerar uma imagem ``escaneada'' a partir de uma foto comum.
-
 \section{Fundamentação}
-Em coordenadas homogêneas, um ponto $(x,y)$ é escrito como $(x,y,1)$. A
-homografia $\mathbf{H}$ leva um ponto $\mathbf{p}$ ao ponto $\mathbf{p}'$:
+Pontos de um plano e seus pontos na imagem estão relacionados por uma
+homografia~\cite{hartley,szeliski,todt}. Em coordenadas homogêneas:
 \begin{equation}
 \begin{bmatrix}x'\\y'\\w'\end{bmatrix}=
 \begin{bmatrix}a&b&c\\d&e&f\\g&h&1\end{bmatrix}
 \begin{bmatrix}x\\y\\1\end{bmatrix},\quad
 u=\frac{x'}{w'},\; v=\frac{y'}{w'}.
 \end{equation}
+A matriz tem 8 graus de liberdade. Cada par $(x,y)\rightarrow(u,v)$ gera duas
+equações lineares, e 4 pares dão um sistema $8\times8$. A função
+\texttt{getPerspectiveTransform} resolve este sistema~\cite{opencv}.
 
-A matriz tem 8 graus de liberdade. Cada correspondência
-$(x,y)\rightarrow(u,v)$ gera duas equações lineares:
-\begin{align}
-ax+by+c-gxu-hyu&=u,\\
-dx+ey+f-gxv-hyv&=v.
-\end{align}
-Com 4 pontos, sem 3 colineares, temos um sistema $8\times8$ com solução única.
-A função \texttt{cv2.getPerspectiveTransform} resolve este sistema.
-
-Uma transformação afim tem a última linha fixa em $[0\;0\;1]$. Ela preserva o
-paralelismo e fica definida por apenas 3 pontos. Por isso, ela não consegue
-levar um trapézio a um retângulo. A Figura~\ref{fig:afim} mostra este limite.
+Como a folha é plana, uma única matriz $3\times3$ desfaz a perspectiva. Uma
+transformação afim não basta: ela preserva o paralelismo e não leva um
+trapézio a um retângulo (Figura~\ref{fig:afim}).
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\columnwidth]{figuras/afim_vs_perspectiva.jpg}
-\caption{Retificação da mesma foto com uma transformação afim (3 cantos) e
-com uma homografia (4 cantos). A afim mantém as linhas paralelas da imagem e
-não corrige a convergência das bordas.}
+\caption{Mesma foto retificada com uma transformação afim (3 cantos) e com uma
+homografia (4 cantos).}
 \label{fig:afim}
 \end{figure}
 
 \section{Método}
-A Figura~\ref{fig:pipeline} mostra as etapas da detecção.
+\begin{enumerate}[leftmargin=*,itemsep=2pt]
+\item \textbf{Detecção.} Reduzimos a imagem para 800~px de largura e aplicamos
+um fechamento morfológico, que apaga o texto. Depois aplicamos Canny e
+escolhemos o maior contorno que \texttt{approxPolyDP} reduz a 4 vértices
+(Figura~\ref{fig:pipeline}).
+\item \textbf{Alternativa por Hough.} Se nenhum contorno fecha, aplicamos
+\texttt{HoughLinesP} e guardamos os segmentos longos. Os segmentos mais
+externos em cada direção são os 4 lados, e os cantos são as interseções.
+\item \textbf{Refinamento.} Na resolução cheia, ajustamos uma reta a cada lado
+com \texttt{fitLine}. Cada canto é a interseção de dois lados vizinhos:
+$\mathbf{x}=\mathbf{l}_1\times\mathbf{l}_2$.
+\item \textbf{Warp.} Calculamos $\mathbf{H}$ e aplicamos
+\texttt{warpPerspective}. O tamanho de saída é o maior comprimento de cada
+par de lados opostos.
+\item \textbf{Efeito de scanner.} Dividimos a imagem pelo fundo estimado, para
+remover sombras, e aplicamos \texttt{adaptiveThreshold}.
+\end{enumerate}
+Se a detecção falhar, a opção \texttt{-{}-manual} permite clicar nos 4 cantos.
 
 \begin{figure*}[t]
 \centering
 \includegraphics[width=\textwidth]{figuras/pipeline.jpg}
-\caption{Etapas da detecção: (a) foto de entrada; (b) escala de cinza após
-o fechamento morfológico, que apaga o texto; (c) bordas de Canny; (d) maior
-contorno convexo com 4 vértices.}
+\caption{Detecção: (a) entrada; (b) cinza após o fechamento; (c) Canny;
+(d) quadrilátero encontrado.}
 \label{fig:pipeline}
 \end{figure*}
 
-\paragraph{1. Detecção do quadrilátero.}
-A imagem é reduzida para 800~px de largura. Aplicamos desfoque gaussiano e um
-fechamento morfológico ($9\times9$). O fechamento remove o texto escuro e deixa
-a folha como uma região clara e uniforme. Em seguida aplicamos Canny, com
-limiares calculados a partir da mediana da imagem. Entre os 10 maiores
-contornos, escolhemos o primeiro que \texttt{approxPolyDP} reduz a 4 vértices
-convexos e que cobre mais de 10\% da imagem.
-
-Se nenhum contorno tem 4 vértices, a borda da folha está aberta em algum
-ponto. Isto acontece, por exemplo, quando a folha está sobre outro papel
-branco. Neste caso, aplicamos a Transformada de Hough probabilística
-(\texttt{HoughLinesP}) no mapa de bordas e guardamos só os segmentos com mais
-de 25\% do lado menor da imagem. Entre os segmentos horizontais, o mais alto é
-a borda superior e o mais baixo é a borda inferior. Entre os verticais, o mais
-à esquerda e o mais à direita são as bordas laterais. Os cantos são as
-interseções destas 4 retas.
-
-\paragraph{2. Refinamento dos cantos.}
-Os cantos da etapa 1 têm erro de alguns pixels. A redução da imagem e a
-aproximação poligonal causam este erro. Na resolução cheia, coletamos os
-pixels de borda numa faixa de $\pm12$~px em torno de cada lado. Ajustamos uma
-reta a cada lado com \texttt{cv2.fitLine} (custo de Huber). Cada canto é a
-interseção de dois lados vizinhos, calculada pelo produto vetorial das retas
-em coordenadas homogêneas: $\mathbf{x}=\mathbf{l}_1\times\mathbf{l}_2$.
-
-\paragraph{3. Ordenação e tamanho de saída.}
-Ordenamos os cantos como superior-esquerdo, superior-direito,
-inferior-direito e inferior-esquerdo. O menor valor de $x+y$ indica o
-superior-esquerdo, e o menor valor de $y-x$ indica o superior-direito.
-A largura de saída é o maior dos dois lados horizontais; a altura é o maior
-dos dois lados verticais.
-
-\paragraph{4. Homografia e warp.}
-Calculamos $\mathbf{H}$ com \texttt{getPerspective\-Transform} e aplicamos
-\texttt{warp\-Perspective} com interpolação cúbica~\cite{opencv}. O OpenCV faz o
-mapeamento inverso: para cada pixel de saída, ele calcula
-$\mathbf{H}^{-1}\mathbf{p}'$ e interpola a foto de entrada.
-
-\paragraph{5. Efeito de scanner.}
-Estimamos o fundo da página com dilatação e filtro de mediana. Dividimos a
-imagem por este fundo para remover sombras. Por fim, aplicamos
-\texttt{adaptiveThreshold} gaussiano.
-
-\paragraph{Modo manual.}
-Se a detecção falhar, a opção \texttt{-{}-manual} abre uma janela. O usuário
-clica nos 4 cantos, e o restante do processo não muda.
-
-O núcleo da aplicação cabe em poucas linhas:
-\begin{lstlisting}
-cantos = detectar_cantos(img)
-dst = np.float32([[0,0],[w-1,0],
-                  [w-1,h-1],[0,h-1]])
-H = cv2.getPerspectiveTransform(cantos, dst)
-out = cv2.warpPerspective(img, H, (w, h))
-scan = efeito_scanner(out)
-\end{lstlisting}
-
-\section{Experimentos}
-Fotos reais não informam a posição exata dos cantos. Por isso, geramos
-fotos sintéticas: um documento de $850\times1100$~px é projetado sobre um
-fundo de madeira simulado, com uma homografia conhecida. Adicionamos
-iluminação desigual, ruído gaussiano, desfoque e compressão JPEG. Criamos
-cinco casos, do quase frontal até uma perspectiva forte.
-
-Medimos três valores para cada caso:
-\begin{itemize}
-\item o erro médio dos cantos (px), antes e depois do refinamento;
-\item a correlação cruzada normalizada (NCC) entre o documento retificado e o
-original. NCC~$=1$ indica imagens iguais. A NCC não depende do brilho, então
-a iluminação desigual não altera a medida;
-\item a maior diferença entre a matriz do nosso sistema $8\times8$ e a matriz
-do OpenCV.
-\end{itemize}
+\section{Experimentos e resultados}
+Geramos cinco fotos sintéticas com cantos conhecidos. Um documento é projetado
+sobre um fundo de madeira com iluminação desigual, ruído e compressão JPEG.
+Medimos o erro médio dos cantos e a correlação cruzada normalizada (NCC) entre
+o documento retificado e o original. NCC~$=1$ indica imagens iguais.
 
 \begin{table*}[t]
 \centering
-\caption{Resultados nas fotos sintéticas. ``Cantos reais'' é a NCC obtida com
-os cantos verdadeiros e serve como limite superior.}
+\caption{Resultados nas fotos sintéticas. ``Cantos reais'' é a NCC com os
+cantos verdadeiros (limite superior).}
 \label{tab:res}
 \begin{tabular}{lcccccc}
 \toprule
- & \multicolumn{2}{c}{Erro dos cantos (px)} & \multicolumn{3}{c}{NCC com o original} & \\
+ & \multicolumn{2}{c}{Erro dos cantos (px)} & \multicolumn{3}{c}{NCC} & \\
 \cmidrule(lr){2-3}\cmidrule(lr){4-6}
 Caso & sem refino & com refino & sem refino & com refino & cantos reais & $\max|H_{\text{nosso}}-H_{\text{cv}}|$\\
 \midrule
-\input{tabela.tex}
+\csname @@input\endcsname tabela.tex
 \bottomrule
 \end{tabular}
 \end{table*}
 
-\begin{figure*}[t]
-\centering
-\includegraphics[width=\textwidth]{figuras/caso_vista_de_baixo.jpg}\\[4pt]
-\includegraphics[width=\textwidth]{figuras/caso_rotacionada.jpg}
-\caption{Dois casos de teste. Da esquerda para a direita: foto com os cantos
-detectados, documento retificado e saída com efeito de scanner.}
-\label{fig:casos}
-\end{figure*}
 
-\section{Resultados e discussão}
-A Tabela~\ref{tab:res} e a Figura~\ref{fig:casos} mostram os resultados. A
-detecção encontrou a folha nos cinco casos. Sem refinamento, o erro médio dos
-cantos ficou em cerca de 2~px, porque a detecção usa a imagem reduzida pela
-metade. No caso de perspectiva forte, um canto ficou a 68~px da posição
-correta, e o documento saiu deformado (NCC negativa). O ajuste de retas
-reduziu o erro para menos de 0{,}5~px em quatro casos e para 1{,}6~px no caso
-mais difícil.
+A detecção encontrou a folha nos cinco casos (Tabela~\ref{tab:res}). Sem refinamento, o erro ficou em cerca de 2~px; no
+caso de perspectiva forte, um canto errou 68~px. O refinamento reduziu o erro
+para menos de 0{,}5~px em quatro casos e para 1{,}6~px no caso mais difícil.
+A NCC ficou perto do limite dado pelos cantos reais. No caso de perspectiva
+forte, a borda distante ocupa poucos pixels, e a homografia amplia qualquer
+erro nessa região. Nosso sistema $8\times8$ e o OpenCV deram a mesma matriz,
+com diferença abaixo de $10^{-12}$.
 
-A NCC mostra que erros pequenos nos cantos têm efeito grande. Com 2~px de erro,
-o texto retificado fica deslocado em relação ao original, e a NCC cai de 0{,}92
-para cerca de 0{,}7. Após o refinamento, a NCC fica perto do limite dado pelos
-cantos reais.
-
-O caso de perspectiva forte continua o mais difícil. A borda superior da folha
-ocupa poucos pixels na foto. A homografia amplia esta região muitas vezes, e
-qualquer erro nos cantos também é ampliado. Mesmo com os cantos reais, esta
-região fica borrada, porque a foto não tem resolução suficiente ali.
-
-\paragraph{Foto real.}
-Também testamos a aplicação numa foto de celular ($1500\times2000$~px) de uma
-folha A4 sobre uma mesa, com outros papéis embaixo
-(Figura~\ref{fig:real}). A borda inferior da folha some onde ela encosta no
-papel branco de baixo, e o contorno não fecha. A primeira etapa da detecção
-falhou. A etapa por retas de Hough encontrou os 4 lados, e o documento saiu
-retificado e legível. Não há cantos verdadeiros para esta foto, então a
-avaliação é só visual. A folha está um pouco curvada, e as linhas de texto
-perto da borda direita ficam levemente inclinadas: a homografia só corrige
-objetos planos.
-
-\begin{figure*}[t]
+\begin{figure*}[b]
 \centering
 \includegraphics[width=\textwidth]{figuras/foto_real.jpg}
-\caption{Foto real. (a) Bordas de Canny: a borda inferior e a borda esquerda
-têm falhas onde a folha encosta em outro papel branco. (b) Cantos encontrados
-pelas retas de Hough e refinados. (c) Documento retificado. (d) Saída com
-efeito de scanner.}
+\caption{Foto real: (a) Canny, com falhas na borda onde a folha encosta em
+outro papel; (b) cantos por Hough; (c) retificada; (d) efeito de scanner.}
 \label{fig:real}
 \end{figure*}
 
-Nosso sistema $8\times8$ e a função do OpenCV deram a mesma matriz. A diferença
-máxima ficou abaixo de $10^{-12}$, que é o erro de arredondamento numérico.
-
-\paragraph{Limitações.} A detecção automática supõe que a folha contrasta com o fundo
-na maior parte das bordas. Folha branca sobre mesa branca, cantos fora da foto
-ou folha dobrada fazem a detecção falhar. Nestes
-casos, use o modo manual. A homografia também supõe que a folha é plana; uma
-página curva de livro não é corrigida.
+\paragraph{Foto real.} Testamos uma foto de celular de uma folha A4 sobre
+outros papéis brancos (Figura~\ref{fig:real}). O contorno não fechou, mas a
+etapa de Hough encontrou os 4 lados, e o documento saiu legível. A folha
+estava um pouco curvada, e a homografia só corrige superfícies planas.
 
 \section{Conclusão}
-Uma homografia calculada a partir de 4 pontos basta para remover a
-perspectiva de um objeto plano. A parte difícil da aplicação não é o warp,
-mas encontrar os 4 cantos com precisão. O refinamento por ajuste de retas
-reduziu o erro dos cantos para menos de 2~px em todos os casos e melhorou
-muito a qualidade do documento retificado. O código está disponível em
-\url{\gitrepo}.
+Uma homografia calculada com 4 pontos remove a perspectiva de um objeto plano.
+A parte difícil é encontrar os cantos com precisão: o ajuste de retas reduziu
+o erro para menos de 2~px em todos os casos. A detecção falha quando a folha
+não contrasta com o fundo; nesse caso, o modo manual resolve.
 
 \begin{thebibliography}{9}
 \bibitem{hartley} R. Hartley e A. Zisserman. \emph{Multiple View Geometry in
