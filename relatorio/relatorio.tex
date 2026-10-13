@@ -32,7 +32,7 @@ um scanner de documentos. A aplicação recebe a foto de uma folha tirada em
 ângulo, encontra os quatro cantos da folha, calcula a homografia que leva
 esses cantos a um retângulo e aplica \texttt{cv2.warpPerspective}. O resultado
 parece uma página escaneada. Testamos a aplicação em cinco fotos sintéticas
-com cantos conhecidos. Após um refinamento por ajuste de retas, o erro médio
+com cantos conhecidos e numa foto real. Após um refinamento por ajuste de retas, o erro médio
 dos cantos ficou abaixo de 0{,}5~px em quatro casos e em 1{,}6~px no caso de
 perspectiva mais forte.
 \end{abstract}
@@ -99,6 +99,15 @@ a folha como uma região clara e uniforme. Em seguida aplicamos Canny, com
 limiares calculados a partir da mediana da imagem. Entre os 10 maiores
 contornos, escolhemos o primeiro que \texttt{approxPolyDP} reduz a 4 vértices
 convexos e que cobre mais de 10\% da imagem.
+
+Se nenhum contorno tem 4 vértices, a borda da folha está aberta em algum
+ponto. Isto acontece, por exemplo, quando a folha está sobre outro papel
+branco. Neste caso, aplicamos a Transformada de Hough probabilística
+(\texttt{HoughLinesP}) no mapa de bordas e guardamos só os segmentos com mais
+de 25\% do lado menor da imagem. Entre os segmentos horizontais, o mais alto é
+a borda superior e o mais baixo é a borda inferior. Entre os verticais, o mais
+à esquerda e o mais à direita são as bordas laterais. Os cantos são as
+interseções destas 4 retas.
 
 \paragraph{2. Refinamento dos cantos.}
 Os cantos da etapa 1 têm erro de alguns pixels. A redução da imagem e a
@@ -201,12 +210,33 @@ ocupa poucos pixels na foto. A homografia amplia esta região muitas vezes, e
 qualquer erro nos cantos também é ampliado. Mesmo com os cantos reais, esta
 região fica borrada, porque a foto não tem resolução suficiente ali.
 
+\paragraph{Foto real.}
+Também testamos a aplicação numa foto de celular ($1500\times2000$~px) de uma
+folha A4 sobre uma mesa, com outros papéis embaixo
+(Figura~\ref{fig:real}). A borda inferior da folha some onde ela encosta no
+papel branco de baixo, e o contorno não fecha. A primeira etapa da detecção
+falhou. A etapa por retas de Hough encontrou os 4 lados, e o documento saiu
+retificado e legível. Não há cantos verdadeiros para esta foto, então a
+avaliação é só visual. A folha está um pouco curvada, e as linhas de texto
+perto da borda direita ficam levemente inclinadas: a homografia só corrige
+objetos planos.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{figuras/foto_real.jpg}
+\caption{Foto real. (a) Bordas de Canny: a borda inferior e a borda esquerda
+têm falhas onde a folha encosta em outro papel branco. (b) Cantos encontrados
+pelas retas de Hough e refinados. (c) Documento retificado. (d) Saída com
+efeito de scanner.}
+\label{fig:real}
+\end{figure*}
+
 Nosso sistema $8\times8$ e a função do OpenCV deram a mesma matriz. A diferença
 máxima ficou abaixo de $10^{-12}$, que é o erro de arredondamento numérico.
 
-\paragraph{Limitações.} A detecção automática supõe que a folha é a maior região
-clara com 4 lados e que ela contrasta com o fundo. Folha branca sobre mesa
-branca, cantos fora da foto ou folha dobrada fazem a detecção falhar. Nestes
+\paragraph{Limitações.} A detecção automática supõe que a folha contrasta com o fundo
+na maior parte das bordas. Folha branca sobre mesa branca, cantos fora da foto
+ou folha dobrada fazem a detecção falhar. Nestes
 casos, use o modo manual. A homografia também supõe que a folha é plana; uma
 página curva de livro não é corrigida.
 

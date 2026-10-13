@@ -40,16 +40,46 @@ def detectar_cantos(img, etapas=None, refinar=True):
             quad = aprox
             break
 
+    cantos = ordenar_cantos(quad) if quad is not None else cantos_por_retas(bordas)
+
     if etapas is not None:
         vis = peq.copy()
-        if quad is not None:
-            cv2.drawContours(vis, [quad], -1, (0, 255, 0), 3)
+        if cantos is not None:
+            cv2.polylines(vis, [np.int32(cantos)], True, (0, 255, 0), 3)
         etapas.update(cinza=cinza, bordas=bordas, contorno=vis)
 
-    if quad is None:
+    if cantos is None:
         return None
-    cantos = ordenar_cantos(quad / escala)
+    cantos = cantos / escala
     return refinar_cantos(img, cantos) if refinar else cantos
+
+
+def reta(x1, y1, x2, y2):
+    return np.cross([x1, y1, 1.0], [x2, y2, 1.0])
+
+
+def cantos_por_retas(bordas):
+    # usado quando o contorno não fecha (ex.: folha sobre outro papel branco)
+    alt, larg = bordas.shape
+    segs = cv2.HoughLinesP(bordas, 1, np.pi / 180, 80,
+                           minLineLength=int(0.25 * min(alt, larg)), maxLineGap=20)
+    if segs is None:
+        return None
+    horiz, vert = [], []
+    for x1, y1, x2, y2 in segs.reshape(-1, 4).astype(float):
+        if abs(x2 - x1) > abs(y2 - y1):
+            # posição do segmento medida no centro da imagem, para comparar alturas
+            y_meio = y1 + (y2 - y1) * (larg / 2 - x1) / (x2 - x1)
+            horiz.append((y_meio, reta(x1, y1, x2, y2)))
+        else:
+            x_meio = x1 + (x2 - x1) * (alt / 2 - y1) / (y2 - y1)
+            vert.append((x_meio, reta(x1, y1, x2, y2)))
+    if len(horiz) < 2 or len(vert) < 2:
+        return None
+    topo, base = min(horiz, key=lambda h: h[0])[1], max(horiz, key=lambda h: h[0])[1]
+    esq, dir_ = min(vert, key=lambda v: v[0])[1], max(vert, key=lambda v: v[0])[1]
+    cantos = [np.cross(a, b) for a, b in [(topo, esq), (topo, dir_), (base, dir_), (base, esq)]]
+    return np.float32([c[:2] / c[2] for c in cantos])
 
 
 def refinar_cantos(img, cantos, faixa=12):
@@ -71,7 +101,7 @@ def refinar_cantos(img, cantos, faixa=12):
             return cantos
         vx, vy, x0, y0 = cv2.fitLine(perto, cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
         # reta homogênea que passa por dois pontos = produto vetorial deles
-        retas.append(np.cross([x0, y0, 1], [x0 + vx, y0 + vy, 1]))
+        retas.append(reta(x0, y0, x0 + vx, y0 + vy))
 
     # canto i = interseção do lado i-1 com o lado i (produto vetorial das retas)
     novos = [np.cross(retas[i - 1], retas[i]) for i in range(4)]

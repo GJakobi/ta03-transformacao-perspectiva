@@ -93,6 +93,18 @@ def main():
     with open(os.path.join("relatorio", "tabela.tex"), "w") as f:
         f.write("\n".join(tabela) + "\n")
 
+    foto = cv2.imread(os.path.join(DADOS, "foto_real.jpg"))
+    if foto is not None:
+        etapas = {}
+        cantos = scanner.detectar_cantos(foto, etapas)
+        ret, _ = scanner.retificar(foto, cantos)
+        vis = foto.copy()
+        cv2.polylines(vis, [np.int32(cantos)], True, (0, 255, 0), 8)
+        cv2.imwrite(os.path.join(FIGS, "foto_real.jpg"),
+                    painel([(etapas["bordas"], "(a) Canny"), (vis, "(b) Cantos (Hough)"),
+                            (ret, "(c) Retificada"), (scanner.efeito_scanner(ret), "(d) Scanner")],
+                           altura=700), JPG)
+
 
 if __name__ == "__main__":
     main()
